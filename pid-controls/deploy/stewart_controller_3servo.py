@@ -17,8 +17,8 @@ import numpy as np
 import serial
 
 
-class AxisPD:
-    """PD controller using measured velocity for the derivative term."""
+class AxisPID:
+    """PID controller using measured velocity for the derivative term."""
 
     def __init__(self, velocity_tau=0.10):
         self.prev_position = None
@@ -29,7 +29,7 @@ class AxisPD:
         self.prev_position = None
         self.filtered_velocity = 0.0
 
-    def calculate(self, target, position, dt, kp, kd):
+    def calculate(self, target, position, dt, kp, ki, kd):
         dt = max(0.005, min(float(dt), 0.15))
         if self.prev_position is None:
             raw_velocity = 0.0
@@ -68,6 +68,7 @@ class StewartController:
         self.dry_run_allowed = bool(c.get("dry_run", True))
 
         self.kp = float(c["control"].get("kp", 2.0))
+        self.ki = float(c["control"].get("ki", 0.0))
         self.kd = float(c["control"].get("kd", 0.4))
         self.loop_hz = float(c["control"].get("loop_hz", 30))
         self.ball_timeout = float(c["control"].get("ball_timeout_s", 0.20))
@@ -110,8 +111,8 @@ class StewartController:
         self.preview_enabled = False
         self.mode = "CAMERA READY — CLICK 3 EDGES"
 
-        self.ax_x = AxisPD(velocity_tau)
-        self.ax_y = AxisPD(velocity_tau)
+        self.ax_x = AxisPID(velocity_tau)
+        self.ax_y = AxisPID(velocity_tau)
         self.log = []
         self.log_start = time.monotonic()
 
@@ -129,14 +130,17 @@ class StewartController:
         else:
             self.connect_serial_only()
 
-        self.thread = threading.Thread(target=self.control_loop, daemon=True)
+        self.thread = threading.Thread(
+            target=self.control_loop,
+            daemon=False
+        )
         self.thread.start()
         self.root.after(20, self.camera_tick)
         self.root.after(100, self.gui_tick)
 
     def _load_or_create_config(self):
         default_cfg = {
-            'camera': {'index': 0, 'width': 640, 'height': 480, 'center_x': None, 'center_y': None},
+            'camera': {'index': 1, 'width': 640, 'height': 480, 'center_x': None, 'center_y': None},
             'ball': {'lower_hsv': [5, 150, 150], 'upper_hsv': [20, 255, 255], 'min_area_px': 75, 'min_circularity': 0.55, 'min_radius_px': 4, 'max_radius_px': 80},
             'servo': {
                 'hardware_enabled': True, 
@@ -150,7 +154,7 @@ class StewartController:
                 'max_step_deg': 0.5, 
                 'jog_step_deg': 1.0
             },
-            'control': {'kp': 2.0, 'kd': 0.4, 'loop_hz': 30, 'ball_timeout_s': 0.2, 'position_filter_tau_s': 0.05, 'velocity_filter_tau_s': 0.1},
+            'control': {'kp': 2.0, 'ki': 0.0, 'kd': 0.4, 'loop_hz': 30, 'ball_timeout_s': 0.2, 'position_filter_tau_s': 0.05, 'velocity_filter_tau_s': 0.1},
             'dry_run': True
         }
         if self.config_path.exists():
@@ -186,12 +190,14 @@ class StewartController:
         self.status_label.pack(anchor="w", pady=(6, 10))
 
         self.kp_var = tk.DoubleVar(value=self.kp)
+        self.ki_var = tk.DoubleVar(value=self.ki)
         self.kd_var = tk.DoubleVar(value=self.kd)
         self.tx_var = tk.DoubleVar(value=0.0)
         self.ty_var = tk.DoubleVar(value=0.0)
 
         for label, variable, low, high in [
             ("Kp", self.kp_var, 0.0, 5.0),
+            ("Ki", self.ki_var, 0.0, 2.0),
             ("Kd", self.kd_var, 0.0, 2.0),
             ("Target X (− left, + right)", self.tx_var, -0.7, 0.7),
             ("Target Y (− down, + up)", self.ty_var, -0.7, 0.7),
@@ -487,6 +493,7 @@ class StewartController:
             return
         with self.lock:
             self.kp = max(0.0, float(self.kp_var.get()))
+            self.ki = max(0.0, float(self.ki_var.get()))
             self.kd = max(0.0, float(self.kd_var.get()))
             self.target = [float(self.tx_var.get()), float(self.ty_var.get())]
             mode = self.mode
@@ -515,9 +522,14 @@ class StewartController:
                 sample = self.ball_measurement
                 armed = self.hardware_armed
                 target = self.target[:]
-                kp, kd = self.kp, self.kd
+                kp, ki, kd = self.kp, self.ki, self.kd
 
             if not armed or sample is None or (now - sample[2]) > self.ball_timeout:
+                self.ax_x.reset()
+                self.ax_y.reset()
+
+                self.filtered_position = None
+
                 next_tick += period
                 time.sleep(max(0.0, next_tick - time.monotonic()))
                 continue
@@ -531,8 +543,9 @@ class StewartController:
                 self.filtered_position += alpha * (raw_position - self.filtered_position)
 
             px, py = self.filtered_position
-            ux = self.ax_x.calculate(target[0], px, dt, kp, kd)
-            uy = self.ax_y.calculate(target[1], py, dt, kp, kd)
+            ux = self.ax_x.calculate(target[0], px, dt, kp, ki, kd)
+            uy = self.ax_y.calculate(target[1], py, dt, kp, ki, kd)
+
 
             offsets = self.mix @ np.array([ux, uy], dtype=float)
             desired = np.clip(self.neutral + offsets, self.minimum, self.maximum)
@@ -557,13 +570,38 @@ class StewartController:
         messagebox.showinfo("Exported", f"Saved to {destination}")
 
     def stop(self):
+
+        print("[SHUTDOWN] Stopping controller...")
+
+        # Signal all background processes to stop
         self.running = False
+
+        with self.lock:
+            self.hardware_armed = False
+
+        # Wait for control thread to finish
+        if hasattr(self, "thread") and self.thread.is_alive():
+            print("[SHUTDOWN] Waiting for control thread...")
+            self.thread.join()
+
+        # Return servos to neutral
         self.send_neutral()
-        if self.ser:
+
+        # Close serial connection
+        if self.ser is not None and self.ser.is_open:
             self.ser.close()
-        self.camera.release()
+
+        # Release camera
+        if self.camera is not None:
+            self.camera.release()
+
+        # Close OpenCV windows
         cv2.destroyAllWindows()
+
+        # Destroy GUI
         self.root.destroy()
+
+        print("[SHUTDOWN] Complete.")
 
     def run(self):
         self.root.mainloop()
