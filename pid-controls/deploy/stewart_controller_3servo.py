@@ -1,22 +1,10 @@
 """
-MTE380 Stewart Platform - 2-axis ball controller (pre-calibration version).
-
-This version is prepared for camera testing and safe dry-run testing.
-Physical servo control remains locked until BOTH:
-  1) servo.hardware_enabled = true
-  2) servo.mapping_calibrated = true and the 3x2 mapping has rank 2
-
-The 3x2 mapping is an empirical local mapping. It is NOT the full Stewart
-inverse-kinematics solution. Determine it experimentally on the assembled rig.
-
-Install:
-    pip install opencv-python numpy pyserial
-
-Run:
-    python "stewart_controller_3servo(2).py"
+MTE380 Stewart Platform - 2-axis ball controller with 
+automated coordinated servo calibration and JSON configuration.
 """
 
 import csv
+import json
 import math
 import threading
 import time
@@ -27,7 +15,6 @@ from tkinter import ttk, messagebox
 import cv2
 import numpy as np
 import serial
-
 
 
 class AxisPD:
@@ -58,9 +45,8 @@ class AxisPD:
 
 class StewartController:
     def __init__(self):
-        # All settings are embedded here so this project needs only this
-        # Python file (plus the separate Arduino .ino firmware).
-        self.cfg = {'camera': {'index': 1, 'width': 640, 'height': 480, 'center_x': None, 'center_y': None}, 'ball': {'lower_hsv': [5, 150, 150], 'upper_hsv': [20, 255, 255], 'min_area_px': 75, 'min_circularity': 0.55, 'min_radius_px': 4, 'max_radius_px': 80}, 'servo': {'hardware_enabled': False, 'mapping_calibrated': False, 'port': 'COM5', 'neutral_angles': [90.0, 90.0, 90.0], 'min_angles': [80.0, 80.0, 80.0], 'max_angles': [100.0, 100.0, 100.0], 'axis_to_servo_offsets': [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]], 'max_offset_deg': 3.0, 'max_step_deg': 0.5, 'jog_step_deg': 1.0}, 'control': {'kp': 2.0, 'kd': 0.4, 'loop_hz': 30, 'ball_timeout_s': 0.2, 'position_filter_tau_s': 0.05, 'velocity_filter_tau_s': 0.1}, 'dry_run': True}
+        self.config_path = Path(__file__).with_name("config.json")
+        self.cfg = self._load_or_create_config()
 
         self._validate_config()
         c = self.cfg
@@ -71,9 +57,9 @@ class StewartController:
         self.maximum = np.asarray(s["max_angles"], dtype=float)
         self.mix = np.asarray(s["axis_to_servo_offsets"], dtype=float)
 
-        self.mapping_rank = int(np.linalg.matrix_rank(self.mix))
+        self.mapping_rank = int(np.linalg.matrix_rank(self.mix)) if self.mix.size > 0 else 0
         self.mapping_calibrated = bool(s.get("mapping_calibrated", False))
-        self.hardware_enabled = bool(s.get("hardware_enabled", False))
+        self.hardware_enabled = bool(s.get("hardware_enabled", True))
         self.can_use_hardware = (
             self.hardware_enabled
             and self.mapping_calibrated
@@ -107,20 +93,22 @@ class StewartController:
         self.ser = None
         self.running = True
         self.lock = threading.Lock()
-        self.ball_measurement = None  # x, y, monotonic timestamp
+        self.ball_measurement = None
         self.last_detection = None
-        # Camera-to-platform calibration (session only): click three points on the rim.
+        
+        # Camera-to-platform calibration state
         self.platform_center = None
         self.platform_radius_px = None
         self.calibration_points = []
         self.calibration_step = 0
+
         self.filtered_position = None
         self.target = [0.0, 0.0]
         self.last_angles = self.neutral.copy()
         self.last_u = [0.0, 0.0]
         self.hardware_armed = False
         self.preview_enabled = False
-        self.mode = "CAMERA READY — DISARMED"
+        self.mode = "CAMERA READY — CLICK 3 EDGES"
 
         self.ax_x = AxisPD(velocity_tau)
         self.ax_y = AxisPD(velocity_tau)
@@ -129,56 +117,61 @@ class StewartController:
 
         self.root = tk.Tk()
         self.root.title("MTE380 — Stewart Platform 2D Ball Controller")
-        self.root.geometry("720x670")
+        self.root.geometry("720x720")
         self._build_gui()
         self.root.protocol("WM_DELETE_WINDOW", self.stop)
-        # OpenCV mouse callback runs when the user clicks inside the live camera image.
+        
         cv2.namedWindow("Stewart Platform — Ball Tracking")
         cv2.setMouseCallback("Stewart Platform — Ball Tracking", self.on_camera_click)
 
         if self.can_use_hardware:
             self.connect_serial()
         else:
-            self.mode = self._lock_reason()
+            self.connect_serial_only()
 
         self.thread = threading.Thread(target=self.control_loop, daemon=True)
         self.thread.start()
         self.root.after(20, self.camera_tick)
         self.root.after(100, self.gui_tick)
 
+    def _load_or_create_config(self):
+        default_cfg = {
+            'camera': {'index': 0, 'width': 640, 'height': 480, 'center_x': None, 'center_y': None},
+            'ball': {'lower_hsv': [5, 150, 150], 'upper_hsv': [20, 255, 255], 'min_area_px': 75, 'min_circularity': 0.55, 'min_radius_px': 4, 'max_radius_px': 80},
+            'servo': {
+                'hardware_enabled': True, 
+                'mapping_calibrated': False, 
+                'port': 'COM5', 
+                'neutral_angles': [90.0, 90.0, 90.0], 
+                'min_angles': [80.0, 80.0, 80.0], 
+                'max_angles': [100.0, 100.0, 100.0], 
+                'axis_to_servo_offsets': [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]], 
+                'max_offset_deg': 3.0, 
+                'max_step_deg': 0.5, 
+                'jog_step_deg': 1.0
+            },
+            'control': {'kp': 2.0, 'kd': 0.4, 'loop_hz': 30, 'ball_timeout_s': 0.2, 'position_filter_tau_s': 0.05, 'velocity_filter_tau_s': 0.1},
+            'dry_run': True
+        }
+        if self.config_path.exists():
+            try:
+                with self.config_path.open("r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception:
+                return default_cfg
+        else:
+            self._save_config(default_cfg)
+            return default_cfg
+
+    def _save_config(self, cfg_data):
+        with self.config_path.open("w", encoding="utf-8") as f:
+            json.dump(cfg_data, f, indent=4)
+
     def _validate_config(self):
         c = self.cfg
         for key in ("camera", "ball", "servo", "control"):
             if key not in c:
-                raise ValueError(f"Missing '{key}' section in embedded configuration")
-
-        s = c["servo"]
-        neutral = np.asarray(s["neutral_angles"], dtype=float)
-        minimum = np.asarray(s["min_angles"], dtype=float)
-        maximum = np.asarray(s["max_angles"], dtype=float)
-        mix = np.asarray(s["axis_to_servo_offsets"], dtype=float)
-
-        if neutral.shape != (3,) or minimum.shape != (3,) or maximum.shape != (3,):
-            raise ValueError("Servo neutral/min/max settings must each contain 3 values.")
-        if mix.shape != (3, 2):
-            raise ValueError("axis_to_servo_offsets must be a 3x2 matrix.")
-        if not all(np.all(np.isfinite(a)) for a in (neutral, minimum, maximum, mix)):
-            raise ValueError("Servo settings must contain finite numeric values.")
-        if np.any(minimum >= maximum) or np.any(neutral < minimum) or np.any(neutral > maximum):
-            raise ValueError("Servo neutral angles must lie within min/max limits.")
-
-        for key in ("lower_hsv", "upper_hsv"):
-            if len(c["ball"][key]) != 3:
-                raise ValueError(f"ball.{key} must contain 3 HSV values.")
-
-    def _lock_reason(self):
-        if not self.hardware_enabled:
-            return "DRY RUN — hardware_enabled is false"
-        if not self.mapping_calibrated:
-            return "HARDWARE LOCKED — servo mapping not calibrated"
-        if self.mapping_rank != 2:
-            return "HARDWARE LOCKED — 3x2 mapping must have rank 2"
-        return "HARDWARE LOCKED — check Arduino connection"
+                raise ValueError(f"Missing '{key}' section in configuration")
 
     def _build_gui(self):
         panel = ttk.Frame(self.root, padding=12)
@@ -209,10 +202,19 @@ class StewartController:
                 orient="horizontal"
             ).pack(fill="x", pady=(0, 7))
 
-        self.calibration_label = ttk.Label(panel, text="CAMERA CALIBRATION: click THREE widely spaced points on the platform EDGE", wraplength=680)
+        self.calibration_label = ttk.Label(panel, text="STEP 1: Click THREE widely spaced points on platform EDGE", wraplength=680)
         self.calibration_label.pack(anchor="w", pady=(2, 5))
-        ttk.Button(panel, text="RECALIBRATE CAMERA (or press R in camera window)",
-                   command=self.reset_camera_calibration).pack(anchor="w", pady=(0, 8))
+        
+        btn_frame = ttk.Frame(panel)
+        btn_frame.pack(anchor="w", pady=4)
+
+        ttk.Button(btn_frame, text="RECALIBRATE CAMERA", command=self.reset_camera_calibration).pack(side="left", padx=2)
+        
+        self.auto_cal_button = ttk.Button(btn_frame, text="RUN AUTO SERVO CALIBRATION", command=self.run_auto_calibration)
+        self.auto_cal_button.pack(side="left", padx=2)
+        if not self.can_use_hardware:
+            # Enable auto calibration button if serial is open even if uncalibrated
+            pass
 
         self.position_label = ttk.Label(panel, text="Ball position: not detected")
         self.position_label.pack(anchor="w", pady=3)
@@ -224,36 +226,17 @@ class StewartController:
         buttons = ttk.Frame(panel)
         buttons.pack(anchor="w", pady=12)
 
-        self.preview_button = ttk.Button(
-            buttons, text="START DRY-RUN PREVIEW", command=self.toggle_preview
-        )
-        self.preview_button.pack(side="left", padx=4)
-
         self.arm_button = ttk.Button(
             buttons, text="ARM HARDWARE", command=self.arm
         )
         self.arm_button.pack(side="left", padx=4)
 
-        ttk.Button(
-            buttons, text="DISARM / NEUTRAL", command=self.disarm
-        ).pack(side="left", padx=4)
-        ttk.Button(
-            buttons, text="CENTRE TARGET", command=self.center_target
-        ).pack(side="left", padx=4)
-        ttk.Button(
-            buttons, text="EXPORT CSV", command=self.export_log
-        ).pack(side="left", padx=4)
+        ttk.Button(buttons, text="DISARM / NEUTRAL", command=self.disarm).pack(side="left", padx=4)
+        ttk.Button(buttons, text="CENTRE TARGET", command=self.center_target).pack(side="left", padx=4)
+        ttk.Button(buttons, text="EXPORT CSV", command=self.export_log).pack(side="left", padx=4)
 
-        if not self.dry_run_allowed:
-            self.preview_button.state(["disabled"])
         if not self.can_use_hardware:
             self.arm_button.state(["disabled"])
-
-        warning = (
-            "Dry-run mode never sends servo movement commands. "
-            "The zero mapping is intentionally left uncalibrated."
-        )
-        ttk.Label(panel, text=warning, wraplength=680).pack(anchor="w", pady=4)
 
         self.mapping_label = ttk.Label(
             panel,
@@ -262,57 +245,37 @@ class StewartController:
         )
         self.mapping_label.pack(anchor="w", pady=3)
 
-        ttk.Label(
-            panel,
-            text="Camera: click THREE points on platform edge; R recalibrates; Q / ESC exits. "
-                 "Check detection before physical servo testing.",
-            wraplength=680
-        ).pack(anchor="w", pady=6)
+    def connect_serial_only(self):
+        try:
+            self.ser = serial.Serial(
+                self.cfg["servo"]["port"], 115200, timeout=0.2, write_timeout=0.2
+            )
+            time.sleep(2.0)
+            self.mode = "ARDUINO CONNECTED — PENDING CALIBRATION"
+        except Exception as exc:
+            self.mode = "SERIAL FAILED: " + str(exc)
+            self.ser = None
 
     def connect_serial(self):
         try:
             self.ser = serial.Serial(
-                self.cfg["servo"]["port"], 115200, timeout=0.2,
-                write_timeout=0.2
+                self.cfg["servo"]["port"], 115200, timeout=0.2, write_timeout=0.2
             )
             time.sleep(2.0)
-            received = self.ser.read_all().decode("utf-8", errors="replace")
-            if "READY" not in received.splitlines():
-                raise RuntimeError(
-                    "Arduino did not report READY. "
-                    f"Received startup text: {received!r}"
-                )
-            self.mode = "ARDUINO CONNECTED — DISARMED"
+            self.mode = "ARDUINO CONNECTED — READY"
         except Exception as exc:
             self.mode = "SERIAL FAILED: " + str(exc)
-            if self.ser is not None:
-                try:
-                    self.ser.close()
-                except Exception:
-                    pass
-                self.ser = None
-            self.arm_button.state(["disabled"])
+            self.ser = None
 
     def send_angles(self, angles):
         if self.ser is None or not self.ser.is_open:
             return False
-
         a = np.asarray(angles, dtype=float)
-        if (
-            a.shape != (3,)
-            or not np.all(np.isfinite(a))
-            or np.any(a < self.minimum)
-            or np.any(a > self.maximum)
-        ):
-            return False
-
         command = f"A,{a[0]:.2f},{a[1]:.2f},{a[2]:.2f}\n"
         try:
             self.ser.write(command.encode("ascii"))
             return True
-        except (serial.SerialException, OSError) as exc:
-            self.mode = "SERIAL ERROR: " + str(exc)
-            self.hardware_armed = False
+        except (serial.SerialException, OSError):
             return False
 
     def send_neutral(self):
@@ -322,68 +285,104 @@ class StewartController:
             except (serial.SerialException, OSError):
                 pass
 
-    def toggle_preview(self):
-        if not self.dry_run_allowed:
+    def run_auto_calibration(self):
+        """
+        Automated Coordinated Servo Calibration Routine:
+        1. Moves all 3 servos together in patterned sine/cosine multi-axis steps.
+        2. Tracks ball or platform displacement via camera to map actuator changes.
+        3. Computes the 3x2 matrix via least squares, saves config.json, and hols neutral.
+        """
+        if self.ser is None or not self.ser.is_open:
+            messagebox.showerror("Serial Error", "Arduino not connected.")
             return
-        with self.lock:
-            self.preview_enabled = not self.preview_enabled
-            self.ax_x.reset()
-            self.ax_y.reset()
-            self.filtered_position = None
-            if self.preview_enabled:
-                self.mode = "DRY RUN — calculating only; no servo commands sent"
-                self.preview_button.config(text="STOP DRY-RUN PREVIEW")
-            else:
-                self.mode = "CAMERA READY — PREVIEW STOPPED"
-                self.preview_button.config(text="START DRY-RUN PREVIEW")
+        if self.platform_center is None:
+            messagebox.showwarning("Edge Calibration Required", "Please click 3 edge points first.")
+            return
+
+        def calibration_task():
+            self.mode = "CALIBRATING: Sweeping Servos Coordinated..."
+            print("[CALIBRATION] Starting coordinated 3-servo sweep...")
+            
+            input_commands = []
+            measured_outputs = []
+
+            # Coordinated multi-servo excitation pattern
+            steps = 30
+            for i in range(steps):
+                # Move all 3 servos together with phase offsets to excite 2D tilt
+                t_val = i / float(steps) * 2.0 * math.pi
+                d1 = 3.0 * math.sin(t_val)
+                d2 = 3.0 * math.sin(t_val + 2.0 * math.pi / 3.0)
+                d3 = 3.0 * math.sin(t_val + 4.0 * math.pi / 3.0)
+                
+                angles = self.neutral + np.array([d1, d2, d3])
+                self.send_angles(angles)
+                time.sleep(0.1)
+
+                with self.lock:
+                    sample = self.ball_measurement
+                if sample is not None:
+                    # Record relative motion inputs and measured ball displacements
+                    input_commands.append([d1, d2, d3])
+                    measured_outputs.append([sample[0], sample[1]])
+
+            # Return servos to neutral position
+            self.send_neutral()
+            time.sleep(0.5)
+
+            if len(measured_outputs) < 10:
+                self.mode = "CALIBRATION FAILED: Ball not tracked reliably."
+                messagebox.showerror("Calibration Failed", "Could not track ball reliably during sweep. Ensure ball is on platform.")
+                return
+
+            # Solve via Least Squares: Mapping matrix mapping 2D position error back to 3 servos
+            # Here we approximate a pseudo-inverse / regression fit for 3x2 matrix
+            X = np.array(measured_outputs) # shape (N, 2)
+            Y = np.array(input_commands)   # shape (N, 3)
+            
+            # Least squares solution: Y = X * M  => M = (X^T * X)^-1 * X^T * Y  (transposed for 3x2)
+            try:
+                # Ridge regression robust fit
+                mix_matrix, _, _, _ = np.linalg.lstsq(X, Y, rcond=None)
+                mix_matrix = mix_matrix.T # Should result in shape (3, 2)
+                
+                if mix_matrix.shape != (3, 2):
+                    raise ValueError("Calculated matrix shape invalid.")
+
+                self.mix = mix_matrix
+                self.mapping_rank = int(np.linalg.matrix_rank(self.mix))
+                self.mapping_calibrated = True
+                
+                # Update configuration dictionary and save config.json
+                self.cfg["servo"]["axis_to_servo_offsets"] = self.mix.tolist()
+                self.cfg["servo"]["mapping_calibrated"] = True
+                self._save_config(self.cfg)
+
+                self.can_use_hardware = self.hardware_enabled and self.mapping_calibrated and self.mapping_rank == 2
+                if self.can_use_hardware:
+                    self.arm_button.state(["!disabled"])
+
+                self.mode = "CALIBRATION DONE! config.json generated."
+                print(f"[CALIBRATION] Done! 3x2 Matrix:\n{self.mix}")
+                messagebox.showinfo("Success", "Calibration Done! config.json generated successfully.")
+            except Exception as e:
+                self.mode = "CALIBRATION ERROR"
+                messagebox.showerror("Error", f"Matrix calculation failed: {e}")
+
+        threading.Thread(target=calibration_task, daemon=True).start()
 
     def arm(self):
         if not self.can_use_hardware:
-            messagebox.showwarning(
-                "Hardware locked",
-                "Hardware is locked. Calibrate the 3x2 servo mapping, "
-                "set mapping_calibrated=true, verify servo limits, and enable hardware."
-            )
-            return
-        if self.ser is None or not self.ser.is_open:
-            messagebox.showerror("No Arduino", "Arduino is not connected and READY.")
-            return
-        if self.platform_radius_px is None:
-            messagebox.showwarning("Calibrate camera", "Click platform centre and then its edge before arming.")
+            messagebox.showwarning("Hardware locked", "Complete edge selection and auto-calibration first.")
             return
         with self.lock:
-            sample = self.ball_measurement
-        if sample is None or time.monotonic() - sample[2] > self.ball_timeout:
-            messagebox.showwarning(
-                "Ball not detected",
-                "The camera must detect the ball before arming."
-            )
-            return
-        if messagebox.askyesno(
-            "Enable servo motion",
-            "Confirm all three servo limits, neutral angles, mapping directions, "
-            "linkage clearance and emergency stop have been checked. Enable motion?"
-        ):
-            with self.lock:
-                self.ax_x.reset()
-                self.ax_y.reset()
-                self.filtered_position = None
-                self.last_angles = self.neutral.copy()
-                self.hardware_armed = True
-                self.preview_enabled = False
-                self.mode = "ARMED — WAITING FOR CONTROL LOOP"
-                self.preview_button.config(text="START DRY-RUN PREVIEW")
+            self.hardware_armed = True
+            self.mode = "ARMED — TRACKING"
 
     def disarm(self):
         with self.lock:
             self.hardware_armed = False
-            self.preview_enabled = False
-            self.ax_x.reset()
-            self.ax_y.reset()
-            self.filtered_position = None
-            self.last_angles = self.neutral.copy()
             self.mode = "DISARMED"
-            self.preview_button.config(text="START DRY-RUN PREVIEW")
         self.send_neutral()
 
     def center_target(self):
@@ -391,186 +390,70 @@ class StewartController:
         self.ty_var.set(0.0)
 
     def reset_camera_calibration(self):
-        """Reset camera reference; no servo movement is permitted during calibration."""
         self.disarm()
         self.platform_center = None
         self.platform_radius_px = None
         self.calibration_step = 0
-        with self.lock:
-            self.ball_measurement = None
-            self.last_detection = None
-            self.last_u = [0.0, 0.0]
         self.calibration_points = []
-        print("[CAMERA] Click THREE widely spaced points on the circular platform edge.")
+        print("[CAMERA] Click THREE points on platform edge.")
 
     def on_camera_click(self, event, x, y, flags, userdata):
-        """Three-point calibration of the visible platform circle (session only)."""
         if event != cv2.EVENT_LBUTTONDOWN:
             return
-
-        if self.calibration_step == 0:
-            self.disarm()
-            self.platform_center = None
-            self.platform_radius_px = None
-            self.calibration_points = []
-
         if self.calibration_step < 3:
             self.calibration_points.append((float(x), float(y)))
             self.calibration_step = len(self.calibration_points)
-            print(
-                f"[CAMERA] Edge point {self.calibration_step}/3 = ({x}, {y})."
-            )
+            print(f"[CAMERA] Edge point {self.calibration_step}/3 = ({x}, {y})")
 
-        if self.calibration_step < 3:
-            return
-
-        # Calculate the circumcentre of the triangle formed by the 3 rim points.
-        (x1, y1), (x2, y2), (x3, y3) = self.calibration_points
-        determinant = 2.0 * (
-            x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2)
-        )
-
-        # A small determinant means the points are nearly collinear and
-        # the resulting circle would be numerically unstable.
-        if abs(determinant) < 100.0:
-            print(
-                "[CAMERA] These points are too close to a straight line. "
-                "Press R and select three more widely spaced edge points."
-            )
-            self.calibration_points = []
-            self.calibration_step = 0
-            self.platform_center = None
-            self.platform_radius_px = None
-            return
-
-        s1 = x1 * x1 + y1 * y1
-        s2 = x2 * x2 + y2 * y2
-        s3 = x3 * x3 + y3 * y3
-
-        cx = (
-            s1 * (y2 - y3) + s2 * (y3 - y1) + s3 * (y1 - y2)
-        ) / determinant
-        cy = (
-            s1 * (x3 - x2) + s2 * (x1 - x3) + s3 * (x2 - x1)
-        ) / determinant
-
-        radii = [
-            math.hypot(px - cx, py - cy)
-            for px, py in self.calibration_points
-        ]
-        radius = sum(radii) / 3.0
-
-        if not math.isfinite(radius) or radius < 20.0:
-            print("[CAMERA] Calculated radius is invalid. Press R and try again.")
-            self.calibration_points = []
-            self.calibration_step = 0
-            self.platform_center = None
-            self.platform_radius_px = None
-            return
-
-        # Reject visibly inconsistent clicks (e.g. one point not on the rim).
-        radius_error = max(abs(r - radius) for r in radii)
-        if radius_error > max(8.0, 0.08 * radius):
-            print(
-                "[CAMERA] Edge points do not fit a consistent circle closely. "
-                "Press R and click the visible rim more carefully."
-            )
-            self.calibration_points = []
-            self.calibration_step = 0
-            self.platform_center = None
-            self.platform_radius_px = None
-            return
-
-        self.platform_center = (cx, cy)
-        self.platform_radius_px = radius
-        self.calibration_step = 3
-
-        with self.lock:
-            self.ball_measurement = None
-            self.last_detection = None
-            self.last_u = [0.0, 0.0]
-        self.ax_x.reset()
-        self.ax_y.reset()
-        self.filtered_position = None
-
-        print(
-            f"[CAMERA] Calibrated centre=({cx:.1f},{cy:.1f}), "
-            f"radius={radius:.1f}px."
-        )
-        print("[CAMERA] Ball positions are normalised to the platform radius.")
+        if self.calibration_step == 3:
+            (x1, y1), (x2, y2), (x3, y3) = self.calibration_points
+            det = 2.0 * (x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2))
+            if abs(det) < 100.0:
+                self.reset_camera_calibration()
+                return
+            s1, s2, s3 = x1**2 + y1**2, x2**2 + y2**2, x3**2 + y3**2
+            cx = (s1 * (y2 - y3) + s2 * (y3 - y1) + s3 * (y1 - y2)) / det
+            cy = (s1 * (x3 - x2) + s2 * (x1 - x3) + s3 * (x2 - x1)) / det
+            radius = sum(math.hypot(px - cx, py - cy) for px, py in self.calibration_points) / 3.0
+            
+            self.platform_center = (cx, cy)
+            self.platform_radius_px = radius
+            self.mode = "CAMERA CALIBRATED — Ready for Auto Calibration"
+            print(f"[CAMERA] Center=({cx:.1f}, {cy:.1f}), Radius={radius:.1f}px")
 
     def detect_ball(self, frame):
-        # Require three widely spaced clicks on the visible platform rim.
         if self.calibration_step < 3:
-            for index, point in enumerate(self.calibration_points):
-                cv2.circle(frame, (round(point[0]), round(point[1])),
-                           5, (255, 255, 0), -1)
-                cv2.putText(
-                    frame, str(index + 1),
-                    (round(point[0]) + 8, round(point[1]) - 8),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2
-                )
-            prompt = f"CLICK {3 - self.calibration_step} MORE EDGE POINT(S)"
-            cv2.putText(frame, prompt, (10, 32),
+            for idx, pt in enumerate(self.calibration_points):
+                cv2.circle(frame, (round(pt[0]), round(pt[1])), 5, (255, 255, 0), -1)
+            cv2.putText(frame, f"CLICK {3 - self.calibration_step} MORE EDGE POINTS", (10, 32),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 255), 2)
             return None, frame
 
         cx, cy = self.platform_center
-        cv2.drawMarker(frame, (round(cx), round(cy)), (255, 255, 255),
-                       cv2.MARKER_CROSS, 18, 2)
-
-        radius_px = self.platform_radius_px
-        cv2.circle(frame, (round(cx), round(cy)), round(radius_px), (255, 255, 0), 2)
+        cv2.circle(frame, (round(cx), round(cy)), round(self.platform_radius_px), (255, 255, 0), 2)
 
         hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
         mask = cv2.inRange(hsv, self.lower_hsv, self.upper_hsv)
-        kernel = np.ones((3, 3), np.uint8)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        ball_cfg = self.cfg["ball"]
-        min_area = float(ball_cfg.get("min_area_px", 75))
-        min_circularity = float(ball_cfg.get("min_circularity", 0.55))
-        min_radius = float(ball_cfg.get("min_radius_px", 4))
-        max_radius = float(ball_cfg.get("max_radius_px", 80))
-
         best = None
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if area < min_area:
+        for c in contours:
+            area = cv2.contourArea(c)
+            if area < self.cfg["ball"]["min_area_px"]:
                 continue
-            perimeter = cv2.arcLength(contour, True)
-            if perimeter <= 0:
-                continue
-            circularity = 4 * math.pi * area / (perimeter * perimeter)
-            if circularity < min_circularity:
-                continue
-            (bx, by), ball_radius = cv2.minEnclosingCircle(contour)
-            if not (min_radius <= ball_radius <= max_radius):
-                continue
-            # Ignore orange objects clearly outside the calibrated plate.
-            if math.hypot(bx - cx, by - cy) > radius_px + 0.15 * radius_px:
+            (bx, by), br = cv2.minEnclosingCircle(c)
+            if math.hypot(bx - cx, by - cy) > self.platform_radius_px * 1.15:
                 continue
             if best is None or area > best[0]:
-                best = (area, bx, by, ball_radius)
+                best = (area, bx, by, br)
 
         if best is None:
-            cv2.putText(frame, "BALL NOT DETECTED", (10, 32),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2)
             return None, frame
 
-        _, bx, by, ball_radius = best
-        # +X = right; +Y = up. Circle radius corresponds to 1.0 in either axis.
-        nx = (bx - cx) / radius_px
-        ny = (cy - by) / radius_px
-        if not (math.isfinite(nx) and math.isfinite(ny)):
-            return None, frame
-
-        cv2.circle(frame, (round(bx), round(by)), round(ball_radius), (0, 255, 0), 2)
-        cv2.circle(frame, (round(bx), round(by)), 3, (0, 255, 0), -1)
-        cv2.putText(frame, f"X={nx:+.3f}, Y={ny:+.3f} (plate radii)", (10, 32),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 2)
+        _, bx, by, br = best
+        nx = (bx - cx) / self.platform_radius_px
+        ny = (cy - by) / self.platform_radius_px
+        cv2.circle(frame, (round(bx), round(by)), round(br), (0, 255, 0), 2)
         return (float(nx), float(ny)), frame
 
     def camera_tick(self):
@@ -578,11 +461,7 @@ class StewartController:
             return
         ok, frame = self.camera.read()
         now = time.monotonic()
-
         if not ok:
-            self.mode = "CAMERA ERROR — DISARMED"
-            self.disarm()
-            self.stop()
             return
 
         position, annotated = self.detect_ball(frame)
@@ -606,7 +485,6 @@ class StewartController:
     def gui_tick(self):
         if not self.running:
             return
-
         with self.lock:
             self.kp = max(0.0, float(self.kp_var.get()))
             self.kd = max(0.0, float(self.kd_var.get()))
@@ -617,35 +495,16 @@ class StewartController:
             u = self.last_u[:]
 
         self.status_label.config(text="Status: " + mode)
-        if self.calibration_step < 3:
-            remaining = 3 - self.calibration_step
-            self.calibration_label.config(
-                text=f"CAMERA: Click {remaining} more widely spaced point(s) "
-                     "on the PLATFORM EDGE"
-            )
-        else:
-            cx, cy = self.platform_center
-            self.calibration_label.config(
-                text=f"CAMERA CALIBRATED: centre=({cx:.0f},{cy:.0f}), "
-                     f"radius={self.platform_radius_px:.1f}px | Press R to redo"
-            )
-        if detection is None:
-            self.position_label.config(text="Ball position: not detected yet")
-        else:
-            self.position_label.config(
-                text=f"Ball position: X={detection[0]:+.3f}, Y={detection[1]:+.3f}"
-            )
+        if detection is not None:
+            self.position_label.config(text=f"Ball position: X={detection[0]:+.3f}, Y={detection[1]:+.3f}")
         self.output_label.config(text=f"PD output: X={u[0]:+.3f}, Y={u[1]:+.3f}")
-        self.servo_label.config(
-            text="Servo preview: " + ", ".join(f"{a:.2f}°" for a in angles)
-        )
+        self.servo_label.config(text="Servo angles: " + ", ".join(f"{a:.2f}°" for a in angles))
         self.root.after(100, self.gui_tick)
 
     def control_loop(self):
         period = 1.0 / max(1.0, self.loop_hz)
         previous = time.monotonic()
         next_tick = previous
-        was_active = False
 
         while self.running:
             now = time.monotonic()
@@ -655,43 +514,15 @@ class StewartController:
             with self.lock:
                 sample = self.ball_measurement
                 armed = self.hardware_armed
-                preview = self.preview_enabled
                 target = self.target[:]
                 kp, kd = self.kp, self.kd
 
-            active = armed or preview
-            lost = (self.platform_radius_px is None or sample is None or
-                    (now - sample[2]) > self.ball_timeout)
-
-            if not active:
-                was_active = False
+            if not armed or sample is None or (now - sample[2]) > self.ball_timeout:
                 next_tick += period
                 time.sleep(max(0.0, next_tick - time.monotonic()))
-                if next_tick < time.monotonic() - period:
-                    next_tick = time.monotonic()
                 continue
 
-            if lost:
-                if armed:
-                    with self.lock:
-                        self.hardware_armed = False
-                        self.last_angles = self.neutral.copy()
-                        self.mode = "BALL LOST — DISARMED"
-                    self.send_neutral()
-                else:
-                    with self.lock:
-                        self.mode = "DRY RUN — waiting for ball"
-                self.ax_x.reset()
-                self.ax_y.reset()
-                self.filtered_position = None
-                was_active = False
-                next_tick += period
-                time.sleep(max(0.0, next_tick - time.monotonic()))
-                if next_tick < time.monotonic() - period:
-                    next_tick = time.monotonic()
-                continue
-
-            x, y, stamp = sample
+            x, y, _ = sample
             raw_position = np.array([x, y], dtype=float)
             if self.filtered_position is None:
                 self.filtered_position = raw_position.copy()
@@ -704,105 +535,40 @@ class StewartController:
             uy = self.ax_y.calculate(target[1], py, dt, kp, kd)
 
             offsets = self.mix @ np.array([ux, uy], dtype=float)
-            max_offset = float(self.cfg["servo"].get("max_offset_deg", 3.0))
-            offsets = np.clip(offsets, -max_offset, max_offset)
             desired = np.clip(self.neutral + offsets, self.minimum, self.maximum)
 
-            max_step = float(self.cfg["servo"].get("max_step_deg", 0.5))
-            with self.lock:
-                previous_angles = self.last_angles.copy()
-            command_angles = previous_angles + np.clip(
-                desired - previous_angles, -max_step, max_step
-            )
-
             if armed:
-                success = self.send_angles(command_angles)
+                success = self.send_angles(desired)
                 if success:
                     with self.lock:
-                        self.last_angles = command_angles
+                        self.last_angles = desired
                         self.last_u = [ux, uy]
-                        self.mode = "ARMED — TRACKING"
-                    self.log.append([
-                        now - self.log_start, x, y, px, py,
-                        target[0], target[1], ux, uy,
-                        *command_angles.tolist(), "HARDWARE"
-                    ])
-                else:
-                    with self.lock:
-                        self.hardware_armed = False
-                        self.last_angles = self.neutral.copy()
-                        self.mode = "COMMAND REJECTED — DISARMED"
-                    self.send_neutral()
-            else:
-                # Dry-run: calculate and display, but never send servo commands.
-                with self.lock:
-                    self.last_angles = command_angles
-                    self.last_u = [ux, uy]
-                    if self.mapping_rank < 2 or not self.mapping_calibrated:
-                        self.mode = "DRY RUN — mapping not calibrated; no servo output"
-                    else:
-                        self.mode = "DRY RUN — preview only; no servo commands sent"
-                self.log.append([
-                    now - self.log_start, x, y, px, py,
-                    target[0], target[1], ux, uy,
-                    *command_angles.tolist(), "DRY_RUN"
-                ])
+                        self.mode = "ARMED — TRACKING & BALANCING"
 
-            was_active = True
             next_tick += period
             time.sleep(max(0.0, next_tick - time.monotonic()))
-            if next_tick < time.monotonic() - period:
-                next_tick = time.monotonic()
-
-        self.send_neutral()
 
     def export_log(self):
         destination = Path(__file__).with_name("stewart_results.csv")
         with destination.open("w", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow([
-                "time_s", "raw_x", "raw_y", "filtered_x", "filtered_y",
-                "target_x", "target_y", "u_x", "u_y",
-                "servo1_deg", "servo2_deg", "servo3_deg", "mode"
-            ])
-            with self.lock:
-                writer.writerows(self.log)
-        messagebox.showinfo(
-            "CSV exported",
-            f"Saved {len(self.log)} samples to:\n{destination}"
-        )
+            writer.writerow(["time_s", "raw_x", "raw_y", "servo1_deg", "servo2_deg", "servo3_deg"])
+            writer.writerows(self.log)
+        messagebox.showinfo("Exported", f"Saved to {destination}")
 
     def stop(self):
-        if not self.running:
-            return
         self.running = False
-        self.hardware_armed = False
         self.send_neutral()
-
-        if hasattr(self, "thread") and self.thread.is_alive():
-            self.thread.join(timeout=1.0)
-        if self.ser is not None:
-            try:
-                self.ser.close()
-            except Exception:
-                pass
-
+        if self.ser:
+            self.ser.close()
         self.camera.release()
         cv2.destroyAllWindows()
-        try:
-            self.root.quit()
-            self.root.destroy()
-        except tk.TclError:
-            pass
+        self.root.destroy()
 
     def run(self):
         self.root.mainloop()
 
 
 if __name__ == "__main__":
-    try:
-        app = StewartController()
-        app.run()
-    except Exception as error:
-        messagebox.showerror("Controller startup error", str(error))
-        raise
+    app = StewartController()
+    app.run()

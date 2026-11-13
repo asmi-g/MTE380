@@ -10,9 +10,9 @@ const int servoChannels[3] = {0, 1, 2};
 const float SERVO_FREQUENCY = 50.0;
 
 // Example calibration values: replace with measured values for each servo
-const bool CALIBRATION_READY = true;
-const float MIN_ANGLE[3] = {60.0, 60.0, 60.0};
-const float MAX_ANGLE[3] = {120.0, 120.0, 120.0};
+const bool CALIBRATION_READY = true; //needs to be true
+const float MIN_ANGLE[3] = {80.0, 80.0, 80.0};
+const float MAX_ANGLE[3] = {100.0, 100.0, 100.0};
 const float NEUTRAL_ANGLE[3] = {90.0, 90.0, 90.0};
 const float NEUTRAL_US[3] = {1500.0, 1500.0, 1500.0};
 const float US_PER_DEGREE[3] = {10.0, 10.0, 10.0};  // Negative for reversed direction
@@ -104,31 +104,14 @@ void loop() {
     }
   }
 
-  
-// Update servos if new command received
-if (newCommand) {
-    Serial.print("Command received: ");
-
-    if (neutralCommand) {
-        Serial.println("N - RETURN TO NEUTRAL");
-    } else {
-        Serial.println("ANGLE COMMAND");
+  // Update servos if new command received
+  if (newCommand) {
+    if (updateServos(targetAngle)) {
+      lastCommandTime = millis();
+      atLevel = neutralCommand;
     }
-
-    bool success = updateServos(targetAngle);
-
-    if (success) {
-        lastCommandTime = millis();
-        atLevel = neutralCommand;
-
-        Serial.println("Servo command executed successfully.");
-    } else {
-        Serial.println("ERROR: Servo command rejected.");
-    }
-
     newCommand = false;
-}
-
+  }
 
   // Return to neutral if commands stop
   if (enabled && !atLevel && millis() - lastCommandTime >= COMMAND_TIMEOUT_MS) {
@@ -189,18 +172,8 @@ bool updateServos(const float angles[3]) {
   }
 
   // Update servo positions
-for (int i = 0; i < 3; i++) {
-    uint16_t pulse = (uint16_t)lroundf(pulseUs[i]);
-
-    Serial.print("Servo ");
-    Serial.print(i + 1);
-    Serial.print(" | Channel ");
-    Serial.print(servoChannels[i]);
-    Serial.print(" | Pulse: ");
-    Serial.print(pulse);
-    Serial.println(" us");
-
-    pwm.writeMicroseconds(servoChannels[i], pulse);
-}
+  for (int i = 0; i < 3; i++) {
+    pwm.writeMicroseconds(servoChannels[i], (uint16_t)lroundf(pulseUs[i]));
+  }
   return true;
 }
