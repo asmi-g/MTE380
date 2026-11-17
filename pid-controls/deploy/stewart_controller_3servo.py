@@ -18,29 +18,49 @@ import serial
 
 
 class AxisPID:
-    """PID controller using measured velocity for the derivative term."""
+    """PID controller using measured velocity for derivative."""
 
-    def __init__(self, velocity_tau=0.10):
+    def __init__(self, velocity_tau=0.10, integral_limit=2.0):
         self.prev_position = None
         self.filtered_velocity = 0.0
         self.velocity_tau = float(velocity_tau)
+        self.integral = 0.0
+        self.integral_limit = float(integral_limit)
 
     def reset(self):
         self.prev_position = None
         self.filtered_velocity = 0.0
+        self.integral = 0.0
 
     def calculate(self, target, position, dt, kp, ki, kd):
         dt = max(0.005, min(float(dt), 0.15))
+
+        error = target - position
+
         if self.prev_position is None:
             raw_velocity = 0.0
         else:
             raw_velocity = (position - self.prev_position) / dt
 
         alpha = dt / (self.velocity_tau + dt)
-        self.filtered_velocity += alpha * (raw_velocity - self.filtered_velocity)
+        self.filtered_velocity += alpha * (
+            raw_velocity - self.filtered_velocity
+        )
+
         self.prev_position = float(position)
 
-        return kp * (target - position) - kd * self.filtered_velocity
+        self.integral += error * dt
+        self.integral = np.clip(
+            self.integral,
+            -self.integral_limit,
+            self.integral_limit
+        )
+
+        return (
+            kp * error
+            + ki * self.integral
+            - kd * self.filtered_velocity
+        )
 
 
 class StewartController:
@@ -65,11 +85,10 @@ class StewartController:
             and self.mapping_calibrated
             and self.mapping_rank == 2
         )
-        self.dry_run_allowed = bool(c.get("dry_run", True))
 
-        self.kp = float(c["control"].get("kp", 2.0))
-        self.ki = float(c["control"].get("ki", 0.0))
-        self.kd = float(c["control"].get("kd", 0.4))
+        self.kp = float(c["control"].get("kp", 10.0))
+        self.ki = float(c["control"].get("ki", 10.0))
+        self.kd = float(c["control"].get("kd", 10.0))
         self.loop_hz = float(c["control"].get("loop_hz", 30))
         self.ball_timeout = float(c["control"].get("ball_timeout_s", 0.20))
         self.position_tau = float(c["control"].get("position_filter_tau_s", 0.05))
@@ -87,6 +106,7 @@ class StewartController:
         self.camera.set(cv2.CAP_PROP_FRAME_WIDTH, c["camera"].get("width", 640))
         self.camera.set(cv2.CAP_PROP_FRAME_HEIGHT, c["camera"].get("height", 480))
         self.camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        
 
         self.lower_hsv = np.asarray(c["ball"]["lower_hsv"], dtype=np.uint8)
         self.upper_hsv = np.asarray(c["ball"]["upper_hsv"], dtype=np.uint8)
@@ -135,7 +155,7 @@ class StewartController:
             daemon=False
         )
         self.thread.start()
-        self.root.after(20, self.camera_tick)
+        self.root.after(10, self.camera_tick)
         self.root.after(100, self.gui_tick)
 
     def _load_or_create_config(self):
@@ -147,15 +167,14 @@ class StewartController:
                 'mapping_calibrated': False, 
                 'port': 'COM5', 
                 'neutral_angles': [90.0, 90.0, 90.0], 
-                'min_angles': [80.0, 80.0, 80.0], 
-                'max_angles': [100.0, 100.0, 100.0], 
+                'min_angles': [70.0, 70.0, 70.0], 
+                'max_angles': [110.0, 110.0, 110.0], 
                 'axis_to_servo_offsets': [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]], 
-                'max_offset_deg': 3.0, 
-                'max_step_deg': 0.5, 
+                'max_offset_deg': 5.0, 
+                'max_step_deg': 1.0, 
                 'jog_step_deg': 1.0
             },
-            'control': {'kp': 2.0, 'ki': 0.0, 'kd': 0.4, 'loop_hz': 30, 'ball_timeout_s': 0.2, 'position_filter_tau_s': 0.05, 'velocity_filter_tau_s': 0.1},
-            'dry_run': True
+            'control': {'kp': 10.0, 'ki': 10.0, 'kd': 10.0, 'loop_hz': 30, 'ball_timeout_s': 0.2, 'position_filter_tau_s': 0.03, 'velocity_filter_tau_s': 0.05},
         }
         if self.config_path.exists():
             try:
@@ -196,9 +215,9 @@ class StewartController:
         self.ty_var = tk.DoubleVar(value=0.0)
 
         for label, variable, low, high in [
-            ("Kp", self.kp_var, 0.0, 5.0),
-            ("Ki", self.ki_var, 0.0, 2.0),
-            ("Kd", self.kd_var, 0.0, 2.0),
+            ("Kp", self.kp_var, 0.0, 10.0),
+            ("Ki", self.ki_var, 0.0, 10.0),
+            ("Kd", self.kd_var, 0.0, 10.0),
             ("Target X (− left, + right)", self.tx_var, -0.7, 0.7),
             ("Target Y (− down, + up)", self.ty_var, -0.7, 0.7),
         ]:
