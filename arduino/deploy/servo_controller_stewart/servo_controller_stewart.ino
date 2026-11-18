@@ -19,11 +19,11 @@ const float MAX_ANGLE[3] = {120.0, 120.0, 120.0};
 const float NEUTRAL_ANGLE[3] = {90.0, 90.0, 90.0};
 
 const float NEUTRAL_US[3] = {
-  950.0, 950.0, 950.0
+  1100, 1050.0, 1215.0
 };
 
 const float US_PER_DEGREE[3] = {
-  -4.0, -4.0, -4.0
+  4.0, 4.0, 4.0
 };
 
 const float MIN_US[3] = {400.0, 400.0, 400.0};
