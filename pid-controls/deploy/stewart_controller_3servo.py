@@ -167,14 +167,14 @@ class StewartController:
                 'mapping_calibrated': False, 
                 'port': 'COM5', 
                 'neutral_angles': [90.0, 90.0, 90.0], 
-                'min_angles': [70.0, 70.0, 70.0], 
-                'max_angles': [110.0, 110.0, 110.0], 
+                'min_angles': [0.0, 0.0, 0.0], 
+                'max_angles': [120.0, 120.0, 120.0], 
                 'axis_to_servo_offsets': [[0.0, 0.0], [0.0, 0.0], [0.0, 0.0]], 
                 'max_offset_deg': 5.0, 
                 'max_step_deg': 1.0, 
                 'jog_step_deg': 1.0
             },
-            'control': {'kp': 10.0, 'ki': 10.0, 'kd': 10.0, 'loop_hz': 30, 'ball_timeout_s': 0.2, 'position_filter_tau_s': 0.03, 'velocity_filter_tau_s': 0.05},
+            'control': {'kp': 2.0, 'ki': 0.0, 'kd': 0.5, 'loop_hz': 50, 'ball_timeout_s': 0.2, 'position_filter_tau_s': 0.015, 'velocity_filter_tau_s': 0.05},
         }
         if self.config_path.exists():
             try:
@@ -294,13 +294,19 @@ class StewartController:
 
     def send_angles(self, angles):
         if self.ser is None or not self.ser.is_open:
+            print("[ERROR] Serial not connected")
             return False
+
         a = np.asarray(angles, dtype=float)
         command = f"A,{a[0]:.2f},{a[1]:.2f},{a[2]:.2f}\n"
+
+        print("[TX]", command.strip())
+
         try:
             self.ser.write(command.encode("ascii"))
             return True
-        except (serial.SerialException, OSError):
+        except (serial.SerialException, OSError) as exc:
+            print("[SERIAL ERROR]", exc)
             return False
 
     def send_neutral(self):
@@ -567,7 +573,14 @@ class StewartController:
 
 
             offsets = self.mix @ np.array([ux, uy], dtype=float)
+            
             desired = np.clip(self.neutral + offsets, self.minimum, self.maximum)
+            print(
+                f"Ball=({px:+.3f}, {py:+.3f}) | "
+                f"PID=({ux:+.3f}, {uy:+.3f}) | "
+                f"Offsets={offsets} | "
+                f"Angles={desired}"
+            )
 
             if armed:
                 success = self.send_angles(desired)

@@ -11,13 +11,29 @@ const float SERVO_FREQUENCY = 50.0;
 
 // Example calibration values: replace with measured values for each servo
 const bool CALIBRATION_READY = true; //needs to be true
-const float MIN_ANGLE[3] = {80.0, 80.0, 80.0};
-const float MAX_ANGLE[3] = {100.0, 100.0, 100.0};
+
+
+const float MIN_ANGLE[3] = {0.0, 0.0, 0.0};
+const float MAX_ANGLE[3] = {120.0, 120.0, 120.0};
+
 const float NEUTRAL_ANGLE[3] = {90.0, 90.0, 90.0};
-const float NEUTRAL_US[3] = {1500.0, 1500.0, 1500.0};
-const float US_PER_DEGREE[3] = {10.0, 10.0, 10.0};  // Negative for reversed direction
-const float MIN_US[3] = {1400.0, 1400.0, 1400.0};
-const float MAX_US[3] = {1600.0, 1600.0, 1600.0};
+
+const float NEUTRAL_US[3] = {
+  950.0, 950.0, 950.0
+};
+
+const float US_PER_DEGREE[3] = {
+  -4.0, -4.0, -4.0
+};
+
+const float MIN_US[3] = {400.0, 400.0, 400.0};
+const float MAX_US[3] = {1500.0, 1500.0, 1500.0};
+
+// const float NEUTRAL_ANGLE[3] = {90.0, 90.0, 90.0};
+// const float NEUTRAL_US[3] = {1500.0, 1500.0, 1500.0};
+// const float US_PER_DEGREE[3] = {9.1667, 9.1667, 9.1667};
+// const float MIN_US[3] = {400.0, 400.0, 400.0};
+// const float MAX_US[3] = {1500.0, 1500.0, 1500.0};
 
 // Communication variables
 const unsigned long BAUD_RATE = 115200;
