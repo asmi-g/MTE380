@@ -1,0 +1,71 @@
+{
+    "camera": {
+        "index": 0,
+        "width": 640,
+        "height": 480,
+        "center_x": null,
+        "center_y": null
+    },
+    "ball": {
+        "lower_hsv": [
+            5,
+            150,
+            150
+        ],
+        "upper_hsv": [
+            20,
+            255,
+            255
+        ],
+        "min_area_px": 75,
+        "min_circularity": 0.55,
+        "min_radius_px": 4,
+        "max_radius_px": 80
+    },
+    "servo": {
+        "hardware_enabled": true,
+        "mapping_calibrated": true,
+        "port": "COM5",
+        "neutral_angles": [
+            90.0,
+            90.0,
+            90.0
+        ],
+        "min_angles": [
+            0.0,
+            0.0,
+            0.0
+        ],
+        "max_angles": [
+            120.0,
+            120.0,
+            120.0
+        ],
+        "axis_to_servo_offsets": [
+            [
+                -6.07780821013734,
+                -7.4586179183404875
+            ],
+            [
+                5.628510318494724,
+                5.745446691785527
+            ],
+            [
+                0.44929789164261713,
+                1.713171226554962
+            ]
+        ],
+        "max_offset_deg": 5.0,
+        "max_step_deg": 1.0,
+        "jog_step_deg": 1.0
+    },
+    "control": {
+        "kp": 2.0,
+        "ki": 0.0,
+        "kd": 0.5,
+        "loop_hz": 70,
+        "ball_timeout_s": 0.2,
+        "position_filter_tau_s": 0.015,
+        "velocity_filter_tau_s": 0.05
+    }
+}
