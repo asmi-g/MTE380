@@ -89,10 +89,10 @@ class StewartController:
         self.kp = float(c["control"].get("kp", 10.0))
         self.ki = float(c["control"].get("ki", 10.0))
         self.kd = float(c["control"].get("kd", 10.0))
-        self.loop_hz = float(c["control"].get("loop_hz", 30))
+        self.loop_hz = float(c["control"].get("loop_hz", 70))
         self.ball_timeout = float(c["control"].get("ball_timeout_s", 0.20))
-        self.position_tau = float(c["control"].get("position_filter_tau_s", 0.05))
-        velocity_tau = float(c["control"].get("velocity_filter_tau_s", 0.10))
+        self.position_tau = float(c["control"].get("position_filter_tau_s", 0.015))
+        velocity_tau = float(c["control"].get("velocity_filter_tau_s", 0.05))
 
         self.camera = cv2.VideoCapture(c["camera"]["index"], cv2.CAP_DSHOW)
         if not self.camera.isOpened():
@@ -160,7 +160,7 @@ class StewartController:
 
     def _load_or_create_config(self):
         default_cfg = {
-            'camera': {'index': 1, 'width': 640, 'height': 480, 'center_x': None, 'center_y': None},
+            'camera': {'index': 0, 'width': 640, 'height': 480, 'center_x': None, 'center_y': None},
             'ball': {'lower_hsv': [5, 150, 150], 'upper_hsv': [20, 255, 255], 'min_area_px': 75, 'min_circularity': 0.55, 'min_radius_px': 4, 'max_radius_px': 80},
             'servo': {
                 'hardware_enabled': True, 
@@ -174,7 +174,7 @@ class StewartController:
                 'max_step_deg': 1.0, 
                 'jog_step_deg': 1.0
             },
-            'control': {'kp': 2.0, 'ki': 0.0, 'kd': 0.5, 'loop_hz': 50, 'ball_timeout_s': 0.2, 'position_filter_tau_s': 0.015, 'velocity_filter_tau_s': 0.05},
+            'control': {'kp': 2.0, 'ki': 0.0, 'kd': 0.5, 'loop_hz': 70, 'ball_timeout_s': 0.2, 'position_filter_tau_s': 0.015, 'velocity_filter_tau_s': 0.05},
         }
         if self.config_path.exists():
             try:
@@ -511,7 +511,7 @@ class StewartController:
         if key == ord("r"):
             self.reset_camera_calibration()
 
-        self.root.after(20, self.camera_tick)
+        self.root.after(10, self.camera_tick)
 
     def gui_tick(self):
         if not self.running:
