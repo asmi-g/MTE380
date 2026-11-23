@@ -2,9 +2,7 @@
     "camera": {
         "index": 1,
         "width": 640,
-        "height": 480,
-        "center_x": null,
-        "center_y": null
+        "height": 480
     },
     "ball": {
         "lower_hsv": [
@@ -17,14 +15,9 @@
             255,
             255
         ],
-        "min_area_px": 75,
-        "min_circularity": 0.55,
-        "min_radius_px": 4,
-        "max_radius_px": 80
+        "min_area_px": 75
     },
     "servo": {
-        "hardware_enabled": true,
-        "mapping_calibrated": true,
         "port": "COM5",
         "neutral_angles": [
             90.0,
@@ -41,31 +34,40 @@
             120.0,
             120.0
         ],
-        "axis_to_servo_offsets": [
-            [
-                3.08062590775803,
-                -0.7918203650710482
-            ],
-            [
-                3.2228204168313646,
-                -4.202187822055317
-            ],
-            [
-                -6.303446324589393,
-                4.994008187126364
-            ]
+        "directions": [
+            1,
+            1,
+            1
         ],
         "max_offset_deg": 5.0,
-        "max_step_deg": 1.0,
-        "jog_step_deg": 1.0
+        "max_speed_deg_s": 30.0
     },
     "control": {
-        "kp": 4.0,
+        "kp": 2.86,
         "ki": 0.0,
-        "kd": 0.5,
-        "loop_hz": 30,
-        "ball_timeout_s": 0.2,
-        "position_filter_tau_s": 0.03,
+        "kd": 3.68,
+        "position_filter_tau_s": 0.015,
         "velocity_filter_tau_s": 0.05
+    },
+    "motion": {
+        "target_radius_fraction": 0.45,
+        "max_speed_radius_s": 0.2,
+        "max_accel_radius_s2": 0.3,
+        "deceleration_radius_s2": 0.3
+    },
+    "edge": {
+        "ball_radius_fraction": 0.15,
+        "margin_fraction": 0.1,
+        "braking_accel_radius_s2": 0.3,
+        "delay_s": 0.2,
+        "release_radius_fraction": 0.5,
+        "release_speed_radius_s": 0.1,
+        "release_hold_s": 0.25,
+        "recovery_speed_radius_s": 0.15,
+        "recovery_velocity_gain_multiplier": 1.5,
+        "recovery_max_tilt_deg": 2.5
+    },
+    "logging": {
+        "enabled": true
     }
 }
