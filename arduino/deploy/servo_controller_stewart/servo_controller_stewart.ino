@@ -4,13 +4,16 @@
 #include <string.h>
 #include <math.h>
 
+//correct file to use
+
+
 // Servo configuration
 Adafruit_PWMServoDriver pwm(0x40);
 const int servoChannels[3] = {0, 1, 2};
 const float SERVO_FREQUENCY = 50.0;
 
-// Example calibration values: replace with measured values for each servo
-const bool CALIBRATION_READY = true; //needs to be true
+// Neutral pulses retained from your supplied sketch; angle conversion is provisional.
+const bool CALIBRATION_READY = true;
 
 
 const float MIN_ANGLE[3] = {0.0, 0.0, 0.0};
@@ -19,21 +22,18 @@ const float MAX_ANGLE[3] = {120.0, 120.0, 120.0};
 const float NEUTRAL_ANGLE[3] = {90.0, 90.0, 90.0};
 
 const float NEUTRAL_US[3] = {
-  1125, 1050.0, 1225.0
+  1650, 1000, 1200.0
 };
 
-const float US_PER_DEGREE[3] = {
-  4.0, 4.0, 4.0
-};
+// CHANGE THIS ARRAY to recalibrate angle conversion, then UPLOAD AGAIN.
+// Units: microseconds per degree of servo SHAFT rotation, not degrees/us.
+// Values correspond to PCA9685 channels 0, 1, 2 and may differ by servo.
+// 10 us/degree is an assumption pending measurement.
+// Example: 120 us pulse change / 10 measured degrees = 12 us/degree.
+const float US_PER_DEGREE[3] = {25, 25, 25};
 
 const float MIN_US[3] = {400.0, 400.0, 400.0};
-const float MAX_US[3] = {1500.0, 1500.0, 1500.0};
-
-// const float NEUTRAL_ANGLE[3] = {90.0, 90.0, 90.0};
-// const float NEUTRAL_US[3] = {1500.0, 1500.0, 1500.0};
-// const float US_PER_DEGREE[3] = {9.1667, 9.1667, 9.1667};
-// const float MIN_US[3] = {400.0, 400.0, 400.0};
-// const float MAX_US[3] = {1500.0, 1500.0, 1500.0};
+const float MAX_US[3] = {3000.0, 1500.0, 1500.0};
 
 // Communication variables
 const unsigned long BAUD_RATE = 115200;

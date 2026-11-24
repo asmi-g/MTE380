@@ -1,0 +1,73 @@
+{
+    "camera": {
+        "index": 0,
+        "width": 640,
+        "height": 480
+    },
+    "ball": {
+        "lower_hsv": [
+            5,
+            150,
+            150
+        ],
+        "upper_hsv": [
+            20,
+            255,
+            255
+        ],
+        "min_area_px": 75
+    },
+    "servo": {
+        "port": "COM5",
+        "neutral_angles": [
+            90.0,
+            90.0,
+            90.0
+        ],
+        "min_angles": [
+            0.0,
+            0.0,
+            0.0
+        ],
+        "max_angles": [
+            120.0,
+            120.0,
+            120.0
+        ],
+        "directions": [
+            1,
+            1,
+            1
+        ],
+        "max_offset_deg": 5.0,
+        "max_speed_deg_s": 30.0
+    },
+    "control": {
+        "kp": 2.0,
+        "ki": 0.0,
+        "kd": 3.4,
+        "position_filter_tau_s": 0.015,
+        "velocity_filter_tau_s": 0.05
+    },
+    "motion": {
+        "target_radius_fraction": 0.45,
+        "max_speed_radius_s": 0.2,
+        "max_accel_radius_s2": 0.3,
+        "deceleration_radius_s2": 0.3
+    },
+    "edge": {
+        "ball_radius_fraction": 0.15,
+        "margin_fraction": 0.1,
+        "braking_accel_radius_s2": 0.3,
+        "delay_s": 0.2,
+        "release_radius_fraction": 0.5,
+        "release_speed_radius_s": 0.1,
+        "release_hold_s": 0.25,
+        "recovery_speed_radius_s": 0.15,
+        "recovery_velocity_gain_multiplier": 1.5,
+        "recovery_max_tilt_deg": 2.5
+    },
+    "logging": {
+        "enabled": true
+    }
+}

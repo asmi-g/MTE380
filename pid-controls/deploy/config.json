@@ -1,11 +1,10 @@
 {
     "camera": {
-        "index": 1,
+        "index": 0,
         "width": 640,
         "height": 480
     },
-    "ball": {
-        "lower_hsv": [
+    "ball": {        "lower_hsv": [
             5,
             150,
             150
@@ -43,9 +42,9 @@
         "max_speed_deg_s": 30.0
     },
     "control": {
-        "kp": 2.86,
+        "kp": 2.0,
         "ki": 0.0,
-        "kd": 3.68,
+        "kd": 3.4,
         "position_filter_tau_s": 0.015,
         "velocity_filter_tau_s": 0.05
     },
